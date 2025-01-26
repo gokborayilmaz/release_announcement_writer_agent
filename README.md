@@ -1,4 +1,4 @@
-# 21-Day Agent Series: Day 1 AGENT : `release_announcement_writer_agent`
+# 21-Day Agent Series: Day 1 AGENT : release_announcement_writer_agent
 
 Welcome to the **21-Day Agent Series**, where each day brings a new, cutting-edge agent!  
 Today marks **Day 1**, featuring the `release_announcement_writer_agent`. This agent specializes in generating polished, platform-specific release announcements tailored for LinkedIn, Reddit, Discord, and Twitter.
@@ -84,26 +84,7 @@ Interactive API docs are available at:
 
 ---
 
-## File Structure
 
-```
-├── upsonicai.py         # Main application code
-├── requirements.txt     # Project dependencies
-├── .env                 # Environment configuration
-├── README.md            # Project documentation
-```
-
----
-
-## Contributing
-
-Contributions are welcome! If you encounter any issues or have feature suggestions, feel free to open a pull request or an issue.
-
----
-
-## License
-
-This project is licensed under the MIT License.
 
 ---
 
