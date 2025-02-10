@@ -1,21 +1,15 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-from upsonic import UpsonicClient, Task, AgentConfiguration, ObjectResponse
-from upsonic.client.tools import Search
 import os
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+from upsonic import Agent, Task, ObjectResponse
+from upsonic.client.tools import Search
 
-# Initialize the Upsonic client
-client = UpsonicClient("localserver")
-client.set_config("AZURE_OPENAI_ENDPOINT", os.getenv("AZURE_OPENAI_ENDPOINT"))
-client.set_config("AZURE_OPENAI_API_VERSION", os.getenv("AZURE_OPENAI_API_VERSION"))
-client.set_config("AZURE_OPENAI_API_KEY", os.getenv("AZURE_OPENAI_API_KEY"))
+# Load environment variables
+load_dotenv()
 
-client.default_llm_model = "azure/gpt-4o"
-
-# Define the FastAPI app
+# Initialize FastAPI app
 app = FastAPI()
 
 # Add CORS middleware to allow frontend interaction
@@ -27,89 +21,66 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Initialize the AI agent
+announcement_agent = Agent("GitHub Release Announcement Agent", model="azure/gpt-4o", reflection=True)
+
 # Define the Response Format for tasks
 class ReleaseDataResponse(ObjectResponse):
     release_title: str
     release_notes: str
 
 class Announcement(ObjectResponse):
-    platform: str
     content: str
 
-# Input model for API
-class ReleaseInput(BaseModel):
-    github_release_url: str
-    company_url: str
-    product_aim: str
-
 @app.post("/generate-announcements/")
-async def generate_announcements(input_data: ReleaseInput):
+async def generate_announcements(input_data: dict):
+    """Generates platform-specific announcements for a GitHub release."""
+    try:
+        github_release_url = input_data.get('github_release_url')
+        company_url = input_data.get('company_url')
+        github_description = input_data.get('github_description')
 
-    upsonic_agent = AgentConfiguration(
-        job_title="Developer Relationship Manager",
-        company_url=input_data.company_url,
-        company_objective=input_data.product_aim
-    )
+        if not github_release_url or not company_url or not github_description:
+            raise HTTPException(status_code=400, detail="Missing required fields.")
 
-    # Task 1: Fetch release data
-    release_task = Task(
-        description="Fetch and analyze release data from the provided GitHub release page.",
-        tools=[Search],
-        response_format=ReleaseDataResponse,
-        context=[input_data.github_release_url]
-    )
+        # Task 1: Fetch release data
+        release_task = Task(
+            f"Fetch and analyze release data from {github_release_url}.",
+            tools=[Search],
+            response_format=ReleaseDataResponse
+        )
+        announcement_agent.do(release_task)
+        release_data = release_task.response
 
-    client.call(
-        release_task
-    )
+        if not release_data:
+            raise HTTPException(status_code=500, detail="Failed to fetch release data.")
 
-    release_data = release_task.response
-    if not release_data:
-        raise HTTPException(status_code=500, detail="Failed to fetch release data.")
+        # Define announcement tasks
+        platforms = {
+            "LinkedIn": "Generate a corporate-style announcement based on the release details.",
+            "Reddit": "Generate a highly technical announcement based on the release details.",
+            "Discord": "Generate a community-friendly announcement based on the release details.",
+            "Twitter": "Generate a fun, emoji-rich announcement based on the release details."
+        }
 
-    # Task 2: Generate LinkedIn announcement
-    linkedin_task = Task(
-        description="Generate a corporate-style announcement based on the release details.",
-        tools=[Search],
-        response_format=Announcement,
-        context=release_data
-    )
+        announcements = {}
+        for platform, description in platforms.items():
+            task = Task(
+                description,
+                tools=[Search],
+                response_format=Announcement,
+                context=[release_data]
+            )
+            announcement_agent.do(task)
+            try:
+                announcements[platform] = task.response.dict(exclude={"platform"})
+            except Exception as e:
+                announcements[platform] = {"error": f"Failed to generate announcement for {platform}: {str(e)}"}
 
-    # Task 3: Generate Reddit announcement
-    reddit_task = Task(
-        description="Generate a highly technical announcement based on the release details.",
-        tools=[Search],
-        response_format=Announcement,
-        context=release_data
-    )
+        return announcements
 
-    # Task 4: Generate Discord announcement
-    discord_task = Task(
-        description="Generate a community-friendly announcement based on the release details.",
-        tools=[Search],
-        response_format=Announcement,
-        context=release_data
-    )
-
-    # Task 5: Generate Twitter announcement
-    twitter_task = Task(
-        description="Generate a fun, emoji-rich announcement based on the release details.",
-        tools=[Search],
-        response_format=Announcement,
-        context=release_data
-    )
-
-    client.agent(upsonic_agent, linkedin_task)
-    client.agent(upsonic_agent, reddit_task)
-    client.agent(upsonic_agent, discord_task)
-    client.agent(upsonic_agent, twitter_task)
-
-    return {
-        "linkedin": linkedin_task.response,
-        "reddit": reddit_task.response,
-        "discord": discord_task.response,
-        "twitter": twitter_task.response
-    }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
@@ -120,72 +91,40 @@ async def serve_ui():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>GitHub Release Announcements</title>
-        <style>
-            body {
-                font-family: Arial, sans-serif;
-                margin: 20px;
-                line-height: 1.6;
-            }
-            h1 {
-                text-align: center;
-            }
-            form {
-                margin-bottom: 20px;
-            }
-            pre {
-                white-space: pre-wrap;
-                word-wrap: break-word;
-                background: #f4f4f4;
-                padding: 10px;
-                border-radius: 5px;
-                overflow-x: auto;
-            }
-            footer {
-                text-align: center;
-                margin-top: 20px;
-                font-size: 0.9em;
-                color: #555;
-            }
-        </style>
+        <script src='https://cdn.tailwindcss.com'></script>
     </head>
-    <body>
-        <h1>Generate Platform Announcements</h1>
-        <form id="announcement-form">
-            <label for="github_release_url">GitHub Release URL:</label><br>
-            <input type="text" id="github_release_url" name="github_release_url" required><br><br>
-
-            <label for="company_url">Company URL:</label><br>
-            <input type="text" id="company_url" name="company_url" required><br><br>
-
-            <label for="product_aim">Product Aim:</label><br>
-            <textarea id="product_aim" name="product_aim" rows="4" required></textarea><br><br>
-
-            <button type="button" onclick="submitForm()">Generate</button>
-        </form>
-
-        <h2>Results</h2>
-        <pre id="results"></pre>
-
-        <footer>Powered by UpsonicAI</footer>
-
+    <body class="bg-gray-100 flex justify-center items-center h-screen">
+        <div class="bg-white p-8 rounded-lg shadow-lg w-[32rem]">
+            <h1 class="text-2xl font-bold text-center mb-4">🚀 Generate Platform Announcements</h1>
+            <input id="github_release_url" type="text" placeholder="GitHub Release URL" class="w-full p-2 border rounded mb-2">
+            <input id="company_url" type="text" placeholder="Company URL" class="w-full p-2 border rounded mb-2">
+            <textarea id="product_aim" placeholder="GitHub Description" class="w-full p-2 border rounded mb-2"></textarea>
+            <button onclick="generateAnnouncements()" class="bg-blue-500 text-white px-4 py-2 rounded w-full">Generate</button>
+            <div id="result" class="mt-4 text-sm text-gray-800 bg-gray-50 p-4 rounded overflow-y-auto h-64"></div>
+        </div>
         <script>
-            async function submitForm() {
-                const github_release_url = document.getElementById('github_release_url').value;
-                const company_url = document.getElementById('company_url').value;
-                const product_aim = document.getElementById('product_aim').value;
+            async function generateAnnouncements() {
+                const resultDiv = document.getElementById("result");
+                resultDiv.innerHTML = "<p class='text-gray-500'>Generating announcements, please wait...</p>";
+                const github_release_url = document.getElementById("github_release_url").value;
+                const company_url = document.getElementById("company_url").value;
+                const github_description = document.getElementById("product_aim").value;
 
-                const response = await fetch('/generate-announcements/', {
-                    method: 'POST',
+                const response = await fetch(`/generate-announcements/`, {
+                    method: "POST",
                     headers: {
-                        'Content-Type': 'application/json',
+                        "Content-Type": "application/json",
                     },
-                    body: JSON.stringify({ github_release_url, company_url, product_aim })
+                    body: JSON.stringify({ github_release_url, company_url, github_description })
                 });
-
                 const data = await response.json();
-                document.getElementById('results').textContent = JSON.stringify(data, null, 2);
+                document.getElementById("result").innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
             }
         </script>
     </body>
     </html>
     """
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
